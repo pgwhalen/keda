@@ -25,6 +25,7 @@ type cronScaler struct {
 	logger        logr.Logger
 	startSchedule cron.Schedule
 	endSchedule   cron.Schedule
+	clock         cronClock
 }
 
 type cronMetadata struct {
@@ -33,6 +34,24 @@ type cronMetadata struct {
 	Timezone        string `keda:"name=timezone,        order=triggerMetadata"`
 	DesiredReplicas int64  `keda:"name=desiredReplicas, order=triggerMetadata"`
 	TriggerIndex    int
+}
+
+type cronClock interface {
+	now() time.Time
+}
+
+type realClock struct{}
+
+func (realClock) now() time.Time {
+	return time.Now()
+}
+
+type mockClock struct {
+	fixedTime time.Time
+}
+
+func (m mockClock) now() time.Time {
+	return m.fixedTime
 }
 
 func (m *cronMetadata) Validate() error {
@@ -57,6 +76,10 @@ func (m *cronMetadata) Validate() error {
 }
 
 func NewCronScaler(config *scalersconfig.ScalerConfig) (Scaler, error) {
+	return newCronScalerWithClock(config, &realClock{})
+}
+
+func newCronScalerWithClock(config *scalersconfig.ScalerConfig, clock cronClock) (Scaler, error) {
 	metricType, err := GetMetricTargetType(config)
 	if err != nil {
 		return nil, fmt.Errorf("error getting scaler metric type: %w", err)
@@ -78,12 +101,8 @@ func NewCronScaler(config *scalersconfig.ScalerConfig) (Scaler, error) {
 		logger:        InitializeLogger(config, "cron_scaler"),
 		startSchedule: startSchedule,
 		endSchedule:   endSchedule,
+		clock:         clock,
 	}, nil
-}
-
-func getCronTime(location *time.Location, schedule cron.Schedule) time.Time {
-	// Use the pre-parsed cron schedule directly to get the next time
-	return schedule.Next(time.Now().In(location))
 }
 
 func parseCronMetadata(config *scalersconfig.ScalerConfig) (cronMetadata, error) {
@@ -125,11 +144,12 @@ func (s *cronScaler) GetMetricsAndActivity(_ context.Context, metricName string)
 		return []external_metrics.ExternalMetricValue{}, false, fmt.Errorf("unable to load timezone: %w", err)
 	}
 
-	currentTime := time.Now().In(location)
+	// Only get the current time once, so non-monotonic clock behavior cannot cause unexpected behavior within this method
+	currentTime := s.clock.now().In(location)
 
 	// Use the pre-parsed schedules to get the next start and end times
-	nextStartTime := getCronTime(location, s.startSchedule)
-	nextEndTime := getCronTime(location, s.endSchedule)
+	nextStartTime := s.startSchedule.Next(currentTime)
+	nextEndTime := s.endSchedule.Next(currentTime)
 
 	isWithinInterval := false
 
