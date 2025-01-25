@@ -39,6 +39,14 @@ var validCronMetadata2 = map[string]string{
 	"desiredReplicas": "10",
 }
 
+// A complete valid metadata example which is enabled every even hours
+var validCronMetadataCrossingMidnight = map[string]string{
+	"timezone":        "Etc/UTC",
+	"start":           "59 23 * * Thu",
+	"end":             "0 1 * * Thu",
+	"desiredReplicas": "10",
+}
+
 var testCronMetadata = []parseCronMetadataTestData{
 	{map[string]string{}, true},
 	{validCronMetadata, false},
@@ -59,8 +67,7 @@ var cronMetricIdentifiers = []cronMetricIdentifier{
 }
 
 var tz, _ = time.LoadLocation(validCronMetadata2["timezone"])
-var currentDay = time.Now().In(tz).Weekday().String()
-var currentHour = time.Now().In(tz).Hour()
+var clock = mockClock{fixedTime: time.Date(2025, 1, 23, 2, 2, 0, 0, tz)}
 
 func TestCronParseMetadata(t *testing.T) {
 	for _, testData := range testCronMetadata {
@@ -75,45 +82,35 @@ func TestCronParseMetadata(t *testing.T) {
 }
 
 func TestIsActive(t *testing.T) {
-	scaler, _ := NewCronScaler(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata})
-	_, isActive, _ := scaler.GetMetricsAndActivity(context.TODO(), "ReplicaCount")
-	if currentDay == "Thursday" {
-		assert.Equal(t, isActive, true)
-	} else {
-		assert.Equal(t, isActive, false)
-	}
+	scaler, _ := newCronScalerWithClock(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata}, clock)
+	_, isActive, _ := scaler.GetMetricsAndActivity(context.Background(), "ReplicaCount")
+	assert.True(t, isActive)
+}
+
+func TestIsActiveCrossingMidnight(t *testing.T) {
+	scaler, _ := newCronScalerWithClock(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadataCrossingMidnight}, clock)
+	_, isActive, _ := scaler.GetMetricsAndActivity(context.Background(), "ReplicaCount")
+	assert.False(t, isActive)
 }
 
 func TestIsActiveRange(t *testing.T) {
-	scaler, _ := NewCronScaler(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata2})
-	_, isActive, _ := scaler.GetMetricsAndActivity(context.TODO(), "ReplicaCount")
-	if currentHour%2 == 0 {
-		assert.Equal(t, isActive, true)
-	} else {
-		assert.Equal(t, isActive, false)
-	}
+	scaler, _ := newCronScalerWithClock(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata2}, clock)
+	_, isActive, _ := scaler.GetMetricsAndActivity(context.Background(), "ReplicaCount")
+	assert.True(t, isActive)
 }
 
 func TestGetMetrics(t *testing.T) {
-	scaler, _ := NewCronScaler(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata})
-	metrics, _, _ := scaler.GetMetricsAndActivity(context.TODO(), "ReplicaCount")
+	scaler, _ := newCronScalerWithClock(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata}, clock)
+	metrics, _, _ := scaler.GetMetricsAndActivity(context.Background(), "ReplicaCount")
 	assert.Equal(t, metrics[0].MetricName, "ReplicaCount")
-	if currentDay == "Thursday" {
-		assert.Equal(t, metrics[0].Value.Value(), int64(10))
-	} else {
-		assert.Equal(t, metrics[0].Value.Value(), int64(1))
-	}
+	assert.Equal(t, metrics[0].Value.Value(), int64(10))
 }
 
 func TestGetMetricsRange(t *testing.T) {
-	scaler, _ := NewCronScaler(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata2})
-	metrics, _, _ := scaler.GetMetricsAndActivity(context.TODO(), "ReplicaCount")
+	scaler, _ := newCronScalerWithClock(&scalersconfig.ScalerConfig{TriggerMetadata: validCronMetadata2}, clock)
+	metrics, _, _ := scaler.GetMetricsAndActivity(context.Background(), "ReplicaCount")
 	assert.Equal(t, metrics[0].MetricName, "ReplicaCount")
-	if currentHour%2 == 0 {
-		assert.Equal(t, metrics[0].Value.Value(), int64(10))
-	} else {
-		assert.Equal(t, metrics[0].Value.Value(), int64(1))
-	}
+	assert.Equal(t, metrics[0].Value.Value(), int64(10))
 }
 
 func TestCronGetMetricSpecForScaling(t *testing.T) {
